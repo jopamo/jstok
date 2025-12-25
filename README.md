@@ -1,4 +1,6 @@
-# jstok
+<div style="background-color:#1e1e1e; padding:1em; display:inline-block; border-radius:8px; text-align:left;">
+  <img src=".github/jstok.png" alt="jstok logo" width="300" style="display:block; margin:0;">
+</div>
 
 **jstok** is a robust, single-header, zero-allocation JSON parser and tokenizer for C. It is designed for embedded systems, high-performance applications, and scenarios where memory allocation is undesirable.
 
@@ -48,7 +50,7 @@ int main() {
     jstoktok_t tokens[32]; // Allocate tokens on stack
 
     jstok_init(&parser);
-    
+  
     int count = jstok_parse(&parser, json, strlen(json), tokens, 32);
 
     if (count < 0) {
@@ -57,7 +59,7 @@ int main() {
     }
 
     printf("Parsed %d tokens.\n", count);
-    
+  
     // tokens[0] is the root object
     return 0;
 }
