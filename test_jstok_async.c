@@ -1,4 +1,3 @@
-#define JSTOK_STRICT
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,6 +190,22 @@ int test_async_split_tokens(void) {
     return 1;
 }
 
+int test_async_split_tokens_deep(void) {
+    const char* json = "{\"a\": [123, \"str\"], \"b\": {\"c\": null, \"d\": false}}";
+    size_t total_len = strlen(json);
+    jstok_parser p;
+    jstoktok_t tokens[32];
+
+    for (size_t split = 1; split < total_len; split++) {
+        jstok_init(&p);
+        if (jstok_parse(&p, json, (int)split, tokens, 32) == JSTOK_ERROR_PART) {
+            int r2 = jstok_parse(&p, json, (int)total_len, tokens, 32);
+            ASSERT(r2 > 0);
+        }
+    }
+    return 1;
+}
+
 /* -------------------------------------------------------------------------- */
 /* SSE Async Tests */
 /* -------------------------------------------------------------------------- */
@@ -254,6 +269,7 @@ int main(void) {
     TEST(async_byte_by_byte);
     TEST(async_random_chunks);
     TEST(async_split_tokens);
+    TEST(async_split_tokens_deep);
     TEST(sse_fragmentation);
 
     printf("\nTests run: %d, Failed: %d\n", tests_run, tests_failed);

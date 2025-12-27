@@ -17,6 +17,9 @@ static void check_bounds(const char* base, int size, const char* ptr, size_t len
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size) {
+    /* Cap size to INT_MAX for int-based APIs */
+    if (Size > 2147483647) Size = 2147483647;
+
     const char* json_data = (const char*)Data;
     int json_len = (int)Size;
 
@@ -24,12 +27,12 @@ int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size) {
      * 1. Fuzz SSE Parser (Independent of JSON validity)
      * ---------------------------------------------------------------------- */
     {
-        int pos = 0;
+        size_t pos = 0;
         jstok_span_t span;
         int safety_loop = 0;
 
         /* Scan the entire buffer as if it were an event stream */
-        while (jstok_sse_next(json_data, json_len, &pos, &span)) {
+        while (jstok_sse_next(json_data, Size, &pos, &span) == JSTOK_SSE_DATA) {
             /* 1. Validate pointer bounds */
             check_bounds(json_data, json_len, span.p, span.n);
 
