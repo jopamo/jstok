@@ -18,6 +18,12 @@ test_async_exe = executable('test_jstok_async',
 
 test('jstok_async_tests', test_async_exe)
 
+test_sse_exe = executable('test_jstok_sse_next', 
+  'test_jstok_sse_next.c',
+  dependencies : jstok_dep)
+
+test('jstok_sse_tests', test_sse_exe)
+
 # Fuzzer (requires Clang)
 if meson.get_compiler('c').get_id() == 'clang'
   executable('fuzz_jstok',

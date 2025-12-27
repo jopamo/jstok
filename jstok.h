@@ -158,14 +158,16 @@ JSTOK_API int jstok_unescape(const char* json, const jstoktok_t* t, char* out, s
  */
 JSTOK_API int jstok_path(const char* json, const jstoktok_t* toks, int count, int root, ...);
 
+typedef enum { JSTOK_SSE_EOF = 0, JSTOK_SSE_DATA = 1, JSTOK_SSE_NEED_MORE = -1 } jstok_sse_res;
+
 /*
  * SSE Line Parser.
  * Scans 'buf' starting at '*pos' for the next "data:" line.
  * - Updates '*pos' to the start of the next line.
  * - Sets 'out' to the span of the payload (excluding "data: " and newline).
- * - Returns 1 if a data line was found, 0 if need more data or EOF.
+ * - Returns JSTOK_SSE_DATA if found, JSTOK_SSE_NEED_MORE if incomplete or EOF.
  */
-JSTOK_API int jstok_sse_next(const char* buf, int len, int* pos, jstok_span_t* out);
+JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos, jstok_span_t* out);
 
 #endif /* JSTOK_NO_HELPERS */
 
@@ -179,6 +181,8 @@ JSTOK_API int jstok_sse_next(const char* buf, int len, int* pos, jstok_span_t* o
 /* Implementation                                                             */
 /* -------------------------------------------------------------------------- */
 #ifndef JSTOK_HEADER
+
+#include <string.h>
 
 /* Minimal helpers, avoid heavy deps */
 static int jstok_is_space(char c) { return (c == ' ' || c == '\t' || c == '\n' || c == '\r'); }
@@ -315,7 +319,8 @@ static int jstok_accept_key(jstok_parser* p) {
     return 0;
 }
 
-static int jstok_parse_string_token(jstok_parser *p, const char *json, int json_len, jstoktok_t *toks, int max_tokens, int parent) {
+static int jstok_parse_string_token(jstok_parser* p, const char* json, int json_len, jstoktok_t* toks, int max_tokens,
+                                    int parent) {
     int start_quote;
     int i;
 
@@ -352,8 +357,7 @@ static int jstok_parse_string_token(jstok_parser *p, const char *json, int json_
             }
             c = json[p->pos];
 
-            if (c == '"' || c == '\\' || c == '/' || c == 'b' || c == 'f' ||
-                c == 'n' || c == 'r' || c == 't') {
+            if (c == '"' || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
                 p->pos++;
                 continue;
             }
@@ -409,7 +413,7 @@ static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, 
     return i;
 }
 
-static int jstok_parse_number_span(jstok_parser *p, const char *json, int json_len, int *out_end) {
+static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_len, int* out_end) {
     int i = p->pos;
 
     if (i >= json_len) {
@@ -647,8 +651,8 @@ JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstok
         parent_idx = fr ? fr->tok : -1;
 
         if (c == '{') {
-            /* Container start also calls accept_value internally. 
-               Ideally we'd rollback there too, but start_container is atomic enough 
+            /* Container start also calls accept_value internally.
+               Ideally we'd rollback there too, but start_container is atomic enough
                (only fails on depth/mem). PART on '{' isn't possible (1 char). */
             r = jstok_start_container(p, json, json_len, tokens, max_tokens, JSTOK_OBJECT);
             if (r < 0) return r;
@@ -711,11 +715,12 @@ JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstok
             /* If we're in an object expecting a key, treat as key */
             if (fr && fr->type == JSTOK_OBJECT && (fr->st == JSTOK_ST_OBJ_KEY_OR_END || fr->st == JSTOK_ST_OBJ_KEY)) {
                 jstok_state_t saved_st = fr->st;
-                
+
                 tok_idx = jstok_parse_string_token(p, json, json_len, tokens, max_tokens, parent_idx);
                 if (tok_idx < 0) {
                     if (tok_idx == JSTOK_ERROR_PART) {
-                        fr->st = saved_st; /* Rollback state (likely irrelevant as parse_string didn't change it, but consistent) */
+                        fr->st = saved_st; /* Rollback state (likely irrelevant as parse_string didn't change it, but
+                                              consistent) */
                     }
                     return tok_idx;
                 }
@@ -1113,75 +1118,51 @@ JSTOK_API int jstok_path(const char* json, const jstoktok_t* toks, int count, in
     return curr;
 }
 
-static int jstok_str_prefix(const char* str, int len, const char* prefix) {
-    int i = 0;
-    while (prefix[i] != '\0') {
-        if (i >= len || str[i] != prefix[i]) return 0;
-        i++;
-    }
-    return i; /* Return length of prefix */
-}
+JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos, jstok_span_t* out) {
+    if (*pos > len) *pos = len;
+    size_t cur = *pos;
+    if (cur >= len) return JSTOK_SSE_NEED_MORE;
 
-JSTOK_API int jstok_sse_next(const char* buf, int len, int* pos, jstok_span_t* out) {
-    int start = *pos;
-    int i = start;
-    int line_len;
-    int prefix_len;
+    while (cur < len) {
+        size_t line_start = cur;
+        const char* p_newline = (const char*)memchr(buf + cur, '\n', len - cur);
 
-    /* Scan for newline */
-    while (i < len && buf[i] != '\n') i++;
-
-    if (i >= len) {
-        /* Line not complete */
-        return 0;
-    }
-
-    /* Check for \r before \n */
-    line_len = i - start;
-    if (line_len > 0 && buf[start + line_len - 1] == '\r') {
-        line_len--;
-    }
-
-    /* Advance position for next call (skip \n) */
-    *pos = i + 1;
-
-    /* Skip empty lines */
-    if (line_len == 0) {
-        /* Recursively look for next valid line, or return 0 if end of block?
-           Better to return 0 but update pos so caller loops.
-           Actually, let's loop internally to find the next DATA line. */
-        return jstok_sse_next(buf, len, pos, out);
-    }
-
-    /* Check for "data:" prefix */
-    prefix_len = jstok_str_prefix(buf + start, line_len, "data:");
-    if (prefix_len > 0) {
-        /* Found data line */
-        const char* payload = buf + start + prefix_len;
-        int payload_len = line_len - prefix_len;
-
-        /* Skip leading space if present ("data: " vs "data:") */
-        if (payload_len > 0 && payload[0] == ' ') {
-            payload++;
-            payload_len--;
+        if (!p_newline) {
+            *pos = line_start;
+            return JSTOK_SSE_NEED_MORE;
         }
 
-        /* Check for [DONE] */
-        if (payload_len == 6 && payload[0] == '[' && payload[1] == 'D' && payload[2] == 'O' && payload[3] == 'N' &&
-            payload[4] == 'E' && payload[5] == ']') {
-            /* Return strict empty span to signal done, or let caller handle string check?
-               Let's return the span, caller checks [DONE]. */
+        size_t next_line_start = (size_t)(p_newline - buf) + 1;
+        size_t line_len = next_line_start - line_start - 1;
+
+        if (line_len > 0 && buf[line_start + line_len - 1] == '\r') {
+            line_len--;
         }
 
-        if (out) {
-            out->p = payload;
-            out->n = (size_t)payload_len;
+        int is_data = 0;
+        if (line_len >= 5 && memcmp(buf + line_start, "data:", 5) == 0) {
+            is_data = 1;
         }
-        return 1;
+
+        if (is_data) {
+            size_t payload_off = 5;
+            if (payload_off < line_len && buf[line_start + payload_off] == ' ') {
+                payload_off++;
+            }
+
+            if (out) {
+                out->p = buf + line_start + payload_off;
+                out->n = line_len - payload_off;
+            }
+            *pos = next_line_start;
+            return JSTOK_SSE_DATA;
+        }
+
+        cur = next_line_start;
+        *pos = cur;
     }
 
-    /* Found a line, but it wasn't "data:" (e.g. "event:" or comment), skip it */
-    return jstok_sse_next(buf, len, pos, out);
+    return JSTOK_SSE_NEED_MORE;
 }
 
 #endif /* JSTOK_NO_HELPERS */

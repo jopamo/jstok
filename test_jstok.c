@@ -23,25 +23,24 @@ int tests_failed = 0;
         tests_run++;                     \
     } while (0)
 
-#define ASSERT(cond) \
-    do { \
-        if (!(cond)) { \
+#define ASSERT(cond)                                                                \
+    do {                                                                            \
+        if (!(cond)) {                                                              \
             printf("\nAssertion failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            return 0; \
-        } \
-    } while(0)
+            return 0;                                                               \
+        }                                                                           \
+    } while (0)
 
-#define ASSERT_EQ(val, expected) \
-    do { \
-        int v = (val); \
-        int e = (expected); \
-        if (v != e) { \
-            printf("\nAssertion failed at %s:%d: %s (got %d, expected %d)\n", __FILE__, __LINE__, #val " == " #expected, v, e); \
-            return 0; \
-        } \
-    } while(0)
-
-
+#define ASSERT_EQ(val, expected)                                                                  \
+    do {                                                                                          \
+        int v = (val);                                                                            \
+        int e = (expected);                                                                       \
+        if (v != e) {                                                                             \
+            printf("\nAssertion failed at %s:%d: %s (got %d, expected %d)\n", __FILE__, __LINE__, \
+                   #val " == " #expected, v, e);                                                  \
+            return 0;                                                                             \
+        }                                                                                         \
+    } while (0)
 
 /* -------------------------------------------------------------------------- */
 /* 1. Core Parsing & Tokenizer Basics */
@@ -224,6 +223,143 @@ int test_syntax_errors(void) {
     return 1;
 }
 
+int test_syntax_errors_extended(void) {
+    jstok_parser p;
+    jstoktok_t t[10];
+
+    // Bad object forms
+    const char* bad_obj_1 = "{\"a\"}";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_obj_1, (int)strlen(bad_obj_1), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_obj_2 = "{\"a\":}";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_obj_2, (int)strlen(bad_obj_2), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_obj_3 = "{,\"a\":1}";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_obj_3, (int)strlen(bad_obj_3), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_obj_4 = "{\"a\":1 \"b\":2}";  // missing comma
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_obj_4, (int)strlen(bad_obj_4), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_obj_5 = "{\"a\":1,, \"b\":2}";  // double comma
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_obj_5, (int)strlen(bad_obj_5), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Bad array forms
+    const char* bad_arr_1 = "[,1]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_arr_1, (int)strlen(bad_arr_1), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_arr_2 = "[1 2]";  // missing comma
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_arr_2, (int)strlen(bad_arr_2), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_arr_3 = "[1,,2]";  // double comma
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_arr_3, (int)strlen(bad_arr_3), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Mismatched nesting
+    const char* bad_nest_1 = "{]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_nest_1, (int)strlen(bad_nest_1), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_nest_2 = "[\"a\"}";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_nest_2, (int)strlen(bad_nest_2), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_nest_3 = "{\"a\":1]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_nest_3, (int)strlen(bad_nest_3), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Root closer
+    const char* root_close = "]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, root_close, (int)strlen(root_close), t, 10) == JSTOK_ERROR_INVAL);
+
+    return 1;
+}
+
+int test_string_errors(void) {
+    jstok_parser p;
+    jstoktok_t t[10];
+
+    // Control chars
+    const char* bad_ctrl = "\"line\nbreak\"";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_ctrl, (int)strlen(bad_ctrl), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Bad escapes
+    const char* bad_esc_1 = "\"\\q\"";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_esc_1, (int)strlen(bad_esc_1), t, 10) == JSTOK_ERROR_INVAL);
+
+    const char* bad_esc_2 = "\"\\u12X4\"";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_esc_2, (int)strlen(bad_esc_2), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Partial strings
+    const char* partial_1 = "\"abc";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, partial_1, (int)strlen(partial_1), t, 10) == JSTOK_ERROR_PART);
+    // Should rewind to start of token (opening quote)
+    ASSERT(p.pos == 0);
+
+    const char* partial_2 = "\"a\\";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, partial_2, (int)strlen(partial_2), t, 10) == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    const char* partial_3 = "\"a\\u12";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, partial_3, (int)strlen(partial_3), t, 10) == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    return 1;
+}
+
+int test_number_errors(void) {
+    jstok_parser p;
+    jstoktok_t t[10];
+
+    // Invalid numbers
+    const char* bad_num_1 = "-";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_num_1, (int)strlen(bad_num_1), t, 10) == JSTOK_ERROR_PART);
+
+    const char* bad_num_2 = "1.";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_num_2, (int)strlen(bad_num_2), t, 10) == JSTOK_ERROR_PART);
+
+    const char* bad_num_3 = "1e";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_num_3, (int)strlen(bad_num_3), t, 10) == JSTOK_ERROR_PART);
+
+    const char* bad_num_4 = "1a";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_num_4, (int)strlen(bad_num_4), t, 10) == JSTOK_ERROR_INVAL);
+
+    // Delimiter enforcement
+    const char* ok_delim_1 = "[123]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, ok_delim_1, (int)strlen(ok_delim_1), t, 10) == 2);  // [123] -> Array, 123 -> 2 tokens
+
+    const char* bad_delim = "[123x]";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_delim, (int)strlen(bad_delim), t, 10) == JSTOK_ERROR_INVAL);
+
+#ifdef JSTOK_STRICT
+    // Leading zeros
+    const char* bad_lead = "01";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, bad_lead, (int)strlen(bad_lead), t, 10) == JSTOK_ERROR_INVAL);
+#endif
+
+    return 1;
+}
+
 // 3.7 Multiple Root Values
 // Note: This requires JSTOK_STRICT to be effective for strictly one value.
 // But standard parser stops after one top-level value if it's not EOF?
@@ -287,6 +423,43 @@ int test_memory_bounds(void) {
 /* 5. Helper Functions */
 /* -------------------------------------------------------------------------- */
 
+int test_helpers_edge_cases(void) {
+    jstok_parser p;
+    jstoktok_t t[20];
+    const char* json = "{\"a\": [1], \"b\": true}";
+    jstok_init(&p);
+    int count = jstok_parse(&p, json, (int)strlen(json), t, 20);
+    ASSERT(count > 0);
+
+    // B1: jstok_span invalid
+    jstok_span_t s = jstok_span(NULL, &t[0]);
+    ASSERT(s.p == NULL && s.n == 0);
+    s = jstok_span(json, NULL);
+    ASSERT(s.p == NULL && s.n == 0);
+
+    // B2: jstok_eq invalid
+    ASSERT(jstok_eq(NULL, &t[0], "a") == 0);
+    ASSERT(jstok_eq(json, NULL, "a") == 0);
+    ASSERT(jstok_eq(json, &t[0], NULL) == 0);
+
+    // B3: jstok_skip
+    int arr_idx = jstok_object_get(json, t, count, 0, "a");
+    // skip array (idx, 1) -> should land on "b" key
+    int after_arr = jstok_skip(t, count, arr_idx);
+    ASSERT(after_arr < count);
+    ASSERT(jstok_eq(json, &t[after_arr], "b"));
+
+    // B4: jstok_array_at
+    ASSERT(jstok_array_at(t, count, arr_idx, 1) == -1);  // OOB
+    ASSERT(jstok_array_at(t, count, 0, 0) == -1);        // Not an array (is object)
+
+    // B5: jstok_object_get
+    ASSERT(jstok_object_get(json, t, count, 0, "z") == -1);        // Missing
+    ASSERT(jstok_object_get(json, t, count, arr_idx, "x") == -1);  // Not an object
+
+    return 1;
+}
+
 int test_helpers_extended(void) {
     jstok_parser p;
     jstoktok_t t[20];
@@ -345,40 +518,40 @@ int test_helpers_extended(void) {
 
 int test_sse_extended(void) {
     jstok_span_t span;
-    int pos = 0;
+    size_t pos = 0;
 
     // 6.1 Standard Line
     const char* s1 = "data: {\"foo\":\"bar\"}\n\n";
-    ASSERT(jstok_sse_next(s1, (int)strlen(s1), &pos, &span) == 1);
+    ASSERT(jstok_sse_next(s1, strlen(s1), &pos, &span) == JSTOK_SSE_DATA);
     ASSERT(strncmp(span.p, "{\"foo\":\"bar\"}", span.n) == 0);
 
     // 6.2 CRLF Line Endings
     const char* s2 = "data: payload\r\n\r\n";
     pos = 0;
-    ASSERT(jstok_sse_next(s2, (int)strlen(s2), &pos, &span) == 1);
+    ASSERT(jstok_sse_next(s2, strlen(s2), &pos, &span) == JSTOK_SSE_DATA);
     ASSERT(strncmp(span.p, "payload", span.n) == 0);
 
     // 6.3 Keep-Alive Comments
     const char* s3 = ": comment\n\ndata: real\n\n";
     pos = 0;
-    ASSERT(jstok_sse_next(s3, (int)strlen(s3), &pos, &span) == 1);
+    ASSERT(jstok_sse_next(s3, strlen(s3), &pos, &span) == JSTOK_SSE_DATA);
     ASSERT(strncmp(span.p, "real", span.n) == 0);
 
     // 6.4 Partial Data
     const char* s4 = "data: incompl";
     pos = 0;
-    ASSERT(jstok_sse_next(s4, (int)strlen(s4), &pos, &span) == 0);
+    ASSERT(jstok_sse_next(s4, strlen(s4), &pos, &span) == JSTOK_SSE_NEED_MORE);
 
     // 6.5 Empty Data
     const char* s5 = "data: \n\n";
     pos = 0;
-    ASSERT(jstok_sse_next(s5, (int)strlen(s5), &pos, &span) == 1);
+    ASSERT(jstok_sse_next(s5, strlen(s5), &pos, &span) == JSTOK_SSE_DATA);
     ASSERT(span.n == 0);
 
     // 6.6 Event/Id Lines (Ignored, finds next data)
     const char* s6 = "event: update\ndata: payload\n\n";
     pos = 0;
-    ASSERT(jstok_sse_next(s6, (int)strlen(s6), &pos, &span) == 1);
+    ASSERT(jstok_sse_next(s6, strlen(s6), &pos, &span) == JSTOK_SSE_DATA);
     ASSERT(strncmp(span.p, "payload", span.n) == 0);
 
     return 1;
@@ -483,23 +656,19 @@ int test_async_chunked(void) {
 
     ASSERT(r == JSTOK_ERROR_PART);
 
-        // Chunk 3: "{\"async\": \"working\", \"num\": 12" (Split inside number)
+    // Chunk 3: "{\"async\": \"working\", \"num\": 12" (Split inside number)
 
-        int chunk3_len = 31;
+    int chunk3_len = 31;
 
-        r = jstok_parse(&p, full_json, chunk3_len, t, 32);
+    r = jstok_parse(&p, full_json, chunk3_len, t, 32);
 
-        ASSERT_EQ(r, JSTOK_ERROR_PART);
+    ASSERT_EQ(r, JSTOK_ERROR_PART);
 
-    
+    // Chunk 4: Full JSON
 
-        // Chunk 4: Full JSON
+    r = jstok_parse(&p, full_json, (int)total_len, t, 32);
 
-        r = jstok_parse(&p, full_json, (int)total_len, t, 32);
-
-        ASSERT(r > 0);
-
-    
+    ASSERT(r > 0);
 
     ASSERT(t[0].type == JSTOK_OBJECT);
 
@@ -539,10 +708,15 @@ int main(void) {
 
     TEST(syntax_errors);
 
+    TEST(syntax_errors_extended);
+    TEST(string_errors);
+    TEST(number_errors);
+
     TEST(syntax_multiroot);
 
     TEST(memory_bounds);
 
+    TEST(helpers_edge_cases);
     TEST(helpers_extended);
 
     TEST(sse_extended);
