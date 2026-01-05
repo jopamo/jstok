@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cfg:
+          - name: default
+            cc: clang
+            cflags: "-O2 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls"
+            ldflags: ""
+            build_dir: build-default
+            env: {}
+          - name: asan-ubsan
+            cc: clang
+            cflags: "-O1 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls -fsanitize=address,undefined -fno-sanitize-recover=all"
+            ldflags: "-fsanitize=address,undefined"
+            build_dir: build-asan-ubsan
+            env:
+              ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1"
+              UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+          - name: ubsan-only
+            cc: clang
+            cflags: "-O1 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls -fsanitize=undefined -fno-sanitize-recover=all"
+            ldflags: "-fsanitize=undefined"
+            build_dir: build-ubsan-only
+            env:
+              UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y clang llvm meson ninja-build git compiler-rt diffutils
+          clang --version
+          llvm-symbolizer --version
+
+      - name: Verify LLVM 21
+        run: |
+          # Extract major version number
+          VER=$(clang --version | head -n1 | grep -oE 'version [0-9]+' | grep -oE '[0-9]+')
+          if [ -z "$VER" ]; then
+             # Try alternate format
+             VER=$(clang --version | head -n1 | grep -oE 'clang version [0-9]+' | grep -oE '[0-9]+')
+          fi
+          
+          # Fallback: just grep the number if the above failed
+          if [ -z "$VER" ]; then
+             VER=$(clang --version | head -n1 | grep -oE '[0-9]+\.' | head -n1 | cut -d. -f1)
+          fi
+          
+          echo "Detected Clang version: $VER"
+          if [ "$VER" -ne 21 ]; then
+            echo "Error: Clang version 21 required, found $VER"
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          CC: ${{ matrix.cfg.cc }}
+          CFLAGS: ${{ matrix.cfg.cflags }}
+          LDFLAGS: ${{ matrix.cfg.ldflags }}
+        run: |
+          meson setup ${{ matrix.cfg.build_dir }}
+          meson compile -C ${{ matrix.cfg.build_dir }}
+
+      - name: Test
+        env:
+          ASAN_SYMBOLIZER_PATH: /usr/bin/llvm-symbolizer
+          ASAN_OPTIONS: ${{ matrix.cfg.env.ASAN_OPTIONS }}
+          UBSAN_OPTIONS: ${{ matrix.cfg.env.UBSAN_OPTIONS }}
+        run: |
+          meson test -C ${{ matrix.cfg.build_dir }} --print-errorlogs
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.cfg.name }}
+          path: ${{ matrix.cfg.build_dir }}/meson-logs/testlog.txt
