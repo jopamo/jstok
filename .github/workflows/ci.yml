@@ -8,6 +8,7 @@ on:
 
 jobs:
   build-and-test:
+    name: Fedora Clang 21 ${{ matrix.cfg.name }}
     runs-on: ubuntu-latest
     container: fedora:latest
     strategy:
