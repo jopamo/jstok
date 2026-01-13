@@ -2,8 +2,20 @@ project('jstok', 'c',
   version : '0.1.0',
   default_options : ['warning_level=3', 'c_std=c99'])
 
+pkg = import('pkgconfig')
+
+install_headers('jstok.h')
+
 # Header-only dependency
 jstok_dep = declare_dependency(include_directories : include_directories('.'))
+
+pkg.generate(
+  name : 'jstok',
+  description : 'Self-contained, header-only C JSON tokenizer',
+  version : meson.project_version(),
+  libraries : [],
+  subdirs : '.',
+)
 
 configs = [
   ['default', []],

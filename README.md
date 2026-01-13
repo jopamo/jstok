@@ -17,6 +17,19 @@
 
 Simply copy `jstok.h` into your project's include directory.
 
+Or install system-wide with Meson:
+
+```bash
+meson setup build
+meson install -C build
+```
+
+This installs `jstok.h` and a pkg-config file. You can then use:
+
+```bash
+pkg-config --cflags jstok
+```
+
 ## Usage
 
 ### 1. Integration
