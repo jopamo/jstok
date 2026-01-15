@@ -11,6 +11,7 @@
 ### Directory Structure
 
 - `jstok.h`: The entire source code (interface + implementation).
+- `tests/`: Unit tests and fuzzing code.
 - `README.md`: User documentation.
 - `DESIGN.md`: Architecture and internal logic.
 
@@ -30,7 +31,7 @@ meson test -C build
 You can also compile the test driver manually:
 
 ```bash
-gcc -Wall -Wextra -std=c99 -o test_jstok test_jstok.c
+gcc -Wall -Wextra -std=c99 -I. -o test_jstok tests/test_jstok.c
 ./test_jstok
 ```
 
