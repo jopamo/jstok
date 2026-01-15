@@ -2,53 +2,112 @@
   <img src=".github/jstok.png" alt="jstok logo" width="300" style="display:block; margin:0;">
 </div>
 
-**jstok** is a robust, single-header, zero-allocation JSON parser and tokenizer for C. It is designed for embedded systems, high-performance applications, and scenarios where memory allocation is undesirable.
+**jstok** is a **zero-allocation, single-header JSON tokenizer and structural parser for C**.
+It is built for environments where **predictable memory**, **input robustness**, and **low overhead** matter more than convenience abstractions.
 
-## Features
+`jstok` does not build a DOM, does not allocate, and does not recurse. It validates structure, emits compact tokens, and leaves all interpretation to the caller.
 
-- **Zero Allocation**: Works entirely with caller-provided buffers. No `malloc`/`free`.
-- **Single Header**: Easy integration into any C/C++ project.
-- **Strict & Permissive**: Configurable strictness (e.g., standard JSON vs. practical extensions).
-- **Helper API**: Includes utilities for traversing objects, arrays, and unescaping strings.
-- **Streaming Friendly**: Supports incremental parsing and "Server-Sent Events" (SSE) line parsing.
-- **Deep Nesting Support**: Configurable recursion depth limit (default 64).
+---
+
+## Highlights
+
+* **Zero Allocation**
+
+  * Entirely caller-owned memory
+  * No `malloc`, no hidden buffers, no surprises
+
+* **Single Header**
+
+  * Drop-in `jstok.h`
+  * No build system coupling, no linker steps
+
+* **Fail-Safe by Design**
+
+  * Never crashes on malformed or hostile input
+  * Explicit error codes and error position reporting
+
+* **Fast, Single-Pass Parsing**
+
+  * Linear scan
+  * Minimal branching in the hot loop
+  * Cache-friendly token layout
+
+* **Configurable Strictness**
+
+  * Strict RFC-style JSON or permissive “real-world” JSON
+  * Compile-time feature control via macros
+
+* **Helper API (Optional)**
+
+  * Object and array traversal
+  * Path lookup
+  * Deferred string unescaping
+  * Integer conversion helpers
+
+* **Streaming Friendly**
+
+  * Incremental parsing support
+  * Built-in Server-Sent Events (SSE) line extraction
+
+* **Deep Nesting Support**
+
+  * Explicit, configurable depth limit
+  * Default: 64
+  * No risk of C stack exhaustion
+
+---
 
 ## Installation
 
-Simply copy `jstok.h` into your project's include directory.
+### Header-Only
 
-Or install system-wide with Meson:
+Copy `jstok.h` into your include path and you are done.
+
+---
+
+### Meson (Optional)
 
 ```bash
 meson setup build
 meson install -C build
 ```
 
-This installs `jstok.h` and a pkg-config file. You can then use:
+Installs:
+
+* `jstok.h`
+* `jstok.pc` (pkg-config)
+
+Usage:
 
 ```bash
 pkg-config --cflags jstok
 ```
 
+---
+
 ## Usage
 
-### 1. Integration
+### 1. Integration Model
 
-In *one* C file, define the implementation:
+In **exactly one** C or C++ file:
 
 ```c
 #define JSTOK_HEADER
 #include "jstok.h"
 
-// In exactly one source file:
+// implementation emitted here
 #include "jstok.h"
 ```
 
-In other files, just include it:
+Everywhere else:
 
 ```c
 #include "jstok.h"
 ```
+
+This avoids multiple-definition issues while keeping everything header-only.
+
+---
 
 ### 2. Basic Parsing
 
@@ -57,70 +116,129 @@ In other files, just include it:
 #include <stdio.h>
 #include <string.h>
 
-int main() {
+int main(void) {
     const char *json = "{\"name\": \"Alice\", \"id\": 1234}";
     jstok_parser parser;
-    jstoktok_t tokens[32]; // Allocate tokens on stack
+    jstoktok_t tokens[32];
 
     jstok_init(&parser);
-  
-    int count = jstok_parse(&parser, json, strlen(json), tokens, 32);
+
+    int count = jstok_parse(
+        &parser,
+        json,
+        strlen(json),
+        tokens,
+        32
+    );
 
     if (count < 0) {
-        printf("Parse error: %d at pos %d\n", count, parser.error_pos);
+        printf("parse error %d at byte %d\n",
+               count,
+               parser.error_pos);
         return 1;
     }
 
-    printf("Parsed %d tokens.\n", count);
-  
-    // tokens[0] is the root object
+    printf("parsed %d tokens\n", count);
+
+    // tokens[0] is always the root value
     return 0;
 }
 ```
 
-### 3. Using Helpers
+---
 
-`jstok` provides helpers to navigate the token tree without manual iteration:
+### 3. Helper API Examples
+
+#### Object Lookup
 
 ```c
-// Get a value from an object
-int id_idx = jstok_object_get(json, tokens, count, 0, "id");
-if (id_idx > 0) {
-    long long id_val;
-    jstok_atoi64(json, &tokens[id_idx], &id_val);
-    printf("ID: %lld\n", id_val);
-}
+int id_idx = jstok_object_get(
+    json,
+    tokens,
+    count,
+    0,
+    "id"
+);
 
-// Deep traversal with jstok_path
-// Equivalent to: root["users"][0]["name"]
-int val_idx = jstok_path(json, tokens, count, 0, "users", 0, "name", NULL);
+if (id_idx > 0) {
+    long long id;
+    jstok_atoi64(json, &tokens[id_idx], &id);
+    printf("ID: %lld\n", id);
+}
 ```
 
-### 4. SSE Parsing
+---
 
-`jstok` includes a specialized parser for Server-Sent Events (data stream):
+#### Path Traversal
+
+```c
+// Equivalent to: root["users"][0]["name"]
+int name_idx = jstok_path(
+    json,
+    tokens,
+    count,
+    0,
+    "users",
+    0,
+    "name",
+    NULL
+);
+```
+
+---
+
+### 4. Server-Sent Events (SSE)
+
+Extract JSON payloads from an SSE stream without copying:
 
 ```c
 int pos = 0;
 jstok_span_t payload;
+
 while (jstok_sse_next(buffer, len, &pos, &payload)) {
-    // payload.p points to the data content
-    // Parse the JSON payload...
+    // payload.p   -> pointer to JSON data
+    // payload.len -> length of JSON data
+
+    // parse payload as normal JSON
 }
 ```
 
+---
+
 ## Configuration
 
-Define these macros before including `jstok.h` to customize behavior:
+Define these **before** including `jstok.h`:
 
-| Macro | Description |
-|-------|-------------|
-| `JSTOK_STATIC` | Make all functions `static` (for single-file tools). |
-| `JSTOK_PARENT_LINKS` | Add a `parent` index to `jstoktok_t` struct. |
-| `JSTOK_MAX_DEPTH` | Maximum nesting depth (default 64). |
-| `JSTOK_STRICT` | Enforce strict JSON (no trailing commas, single root). |
-| `JSTOK_NO_HELPERS` | Disable the helper API (parsing core only). |
+| Macro                | Effect                             |
+| -------------------- | ---------------------------------- |
+| `JSTOK_STATIC`       | Emit all functions as `static`     |
+| `JSTOK_PARENT_LINKS` | Add parent index to tokens         |
+| `JSTOK_MAX_DEPTH`    | Maximum nesting depth (default 64) |
+| `JSTOK_STRICT`       | Enforce strict RFC JSON            |
+| `JSTOK_NO_HELPERS`   | Disable helper API entirely        |
+
+All options are compile-time and zero-cost when disabled.
+
+---
+
+## What jstok Is (and Is Not)
+
+**Is**
+
+* A tokenizer
+* A structural validator
+* A zero-allocation parsing core
+* A foundation for higher-level JSON tooling
+
+**Is Not**
+
+* A DOM builder
+* A serializer
+* A schema validator
+* A dynamic JSON value system
+
+---
 
 ## License
 
-MIT License. See the header file for details.
+MIT
