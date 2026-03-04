@@ -195,9 +195,6 @@ JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos,
 
 /* Minimal helpers, avoid heavy deps */
 #define jstok_is_space(c) ((c) == ' ' || (c) == '\t' || (c) == '\n' || (c) == '\r')
-static int jstok_is_digit(char c) { return (c >= '0' && c <= '9'); }
-static int jstok_is_hex(char c) { return (jstok_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')); }
-static int jstok_is_delim(char c) { return (c == ',' || c == ']' || c == '}' || jstok_is_space(c)); }
 
 enum {
     JSTOK_CC_OTHER = 0,
@@ -225,7 +222,58 @@ static const unsigned char jstok_char_class[256] = {
     ['"'] = JSTOK_CC_QUOTE
 };
 
+static const unsigned char jstok_digit_class[256] = {
+    ['0'] = 1,
+    ['1'] = 1,
+    ['2'] = 1,
+    ['3'] = 1,
+    ['4'] = 1,
+    ['5'] = 1,
+    ['6'] = 1,
+    ['7'] = 1,
+    ['8'] = 1,
+    ['9'] = 1
+};
+
+static const unsigned char jstok_hex_class[256] = {
+    ['0'] = 1,
+    ['1'] = 1,
+    ['2'] = 1,
+    ['3'] = 1,
+    ['4'] = 1,
+    ['5'] = 1,
+    ['6'] = 1,
+    ['7'] = 1,
+    ['8'] = 1,
+    ['9'] = 1,
+    ['a'] = 1,
+    ['b'] = 1,
+    ['c'] = 1,
+    ['d'] = 1,
+    ['e'] = 1,
+    ['f'] = 1,
+    ['A'] = 1,
+    ['B'] = 1,
+    ['C'] = 1,
+    ['D'] = 1,
+    ['E'] = 1,
+    ['F'] = 1
+};
+
+static const unsigned char jstok_delim_class[256] = {
+    [' '] = 1,
+    ['\t'] = 1,
+    ['\n'] = 1,
+    ['\r'] = 1,
+    [','] = 1,
+    [']'] = 1,
+    ['}'] = 1
+};
+
 #define jstok_classify(c) (jstok_char_class[(unsigned char)(c)])
+#define jstok_is_digit(c) (jstok_digit_class[(unsigned char)(c)] != 0u)
+#define jstok_is_hex(c) (jstok_hex_class[(unsigned char)(c)] != 0u)
+#define jstok_is_delim(c) (jstok_delim_class[(unsigned char)(c)] != 0u)
 
 static void jstok_set_error(jstok_parser* p, int code, int pos) {
     p->error_code = code;
@@ -451,35 +499,43 @@ static int jstok_parse_string_token(jstok_parser* p, const char* json, int json_
     return JSTOK_ERROR_PART;
 }
 
-static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, const char* lit, unsigned flags) {
-    int i = 0;
+static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, const char* lit, int lit_len,
+                               unsigned flags) {
+    int i;
     int start = p->pos;
-    while (lit[i] != '\0') {
-        if (p->pos + i >= json_len) {
-            jstok_set_error(p, JSTOK_ERROR_PART, p->pos + i);
-            p->pos = start; /* Rewind for resume */
-            return JSTOK_ERROR_PART;
-        }
-        if (json[p->pos + i] != lit[i]) {
-            jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos + i);
-            return JSTOK_ERROR_INVAL;
-        }
-        i++;
+    int avail = json_len - start;
+
+    if (avail < lit_len) {
+        jstok_set_error(p, JSTOK_ERROR_PART, json_len);
+        p->pos = start; /* Rewind for resume */
+        return JSTOK_ERROR_PART;
     }
-    /* Need delimiter, or final EOF when caller confirms end-of-stream. */
-    if (p->pos + i >= json_len) {
-        if ((flags & JSTOK_PARSE_FINAL) == 0u) {
-            jstok_set_error(p, JSTOK_ERROR_PART, p->pos + i);
-            p->pos = start; /* Rewind for resume */
-            return JSTOK_ERROR_PART;
+
+    if (memcmp(json + start, lit, (size_t)lit_len) != 0) {
+        for (i = 0; i < lit_len; i++) {
+            if (json[start + i] != lit[i]) {
+                jstok_set_error(p, JSTOK_ERROR_INVAL, start + i);
+                return JSTOK_ERROR_INVAL;
+            }
         }
-        return i;
-    }
-    if (!jstok_is_delim(json[p->pos + i])) {
-        jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos + i);
+        jstok_set_error(p, JSTOK_ERROR_INVAL, start);
         return JSTOK_ERROR_INVAL;
     }
-    return i;
+
+    /* Need delimiter, or final EOF when caller confirms end-of-stream. */
+    if (start + lit_len >= json_len) {
+        if ((flags & JSTOK_PARSE_FINAL) == 0u) {
+            jstok_set_error(p, JSTOK_ERROR_PART, start + lit_len);
+            p->pos = start; /* Rewind for resume */
+            return JSTOK_ERROR_PART;
+        }
+        return lit_len;
+    }
+    if (!jstok_is_delim(json[start + lit_len])) {
+        jstok_set_error(p, JSTOK_ERROR_INVAL, start + lit_len);
+        return JSTOK_ERROR_INVAL;
+    }
+    return lit_len;
 }
 
 static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_len, int* out_end, unsigned flags) {
@@ -582,17 +638,17 @@ static int jstok_parse_primitive_token(jstok_parser* p, const char* json, int js
     }
 
     if (json[p->pos] == 't') {
-        n = jstok_parse_literal(p, json, json_len, "true", flags);
+        n = jstok_parse_literal(p, json, json_len, "true", 4, flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
     } else if (json[p->pos] == 'f') {
-        n = jstok_parse_literal(p, json, json_len, "false", flags);
+        n = jstok_parse_literal(p, json, json_len, "false", 5, flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
     } else if (json[p->pos] == 'n') {
-        n = jstok_parse_literal(p, json, json_len, "null", flags);
+        n = jstok_parse_literal(p, json, json_len, "null", 4, flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
@@ -737,13 +793,13 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
         jstok_frame_t* fr;
         int parent_idx;
 
+        while (p->pos < json_len && jstok_classify(json[p->pos]) == JSTOK_CC_SPACE) {
+            p->pos++;
+        }
+        if (p->pos >= json_len) break;
+
         c = json[p->pos];
         cls = jstok_classify(c);
-
-        if (cls == JSTOK_CC_SPACE) {
-            p->pos++;
-            continue;
-        }
 
         fr = jstok_top(p);
         parent_idx = fr ? fr->tok : -1;
@@ -908,28 +964,18 @@ JSTOK_API jstok_span_t jstok_span(const char* json, const jstoktok_t* t) {
     return s;
 }
 
-static int jstok_cstr_len(const char* s) {
-    int n = 0;
-    if (!s) return 0;
-    while (s[n] != '\0') n++;
-    return n;
-}
-
 JSTOK_API int jstok_eq(const char* json, const jstoktok_t* t, const char* s) {
-    int i, n;
+    size_t n;
     jstok_span_t sp;
 
     if (!json || !t || !s) return 0;
     sp = jstok_span(json, t);
     if (!sp.p) return 0;
 
-    n = jstok_cstr_len(s);
-    if ((int)sp.n != n) return 0;
+    n = strlen(s);
+    if (sp.n != n) return 0;
 
-    for (i = 0; i < n; i++) {
-        if (sp.p[i] != s[i]) return 0;
-    }
-    return 1;
+    return memcmp(sp.p, s, n) == 0;
 }
 
 /* Skip subtree without recursion using a small stack */
@@ -1009,19 +1055,28 @@ JSTOK_API int jstok_object_get(const char* json, const jstoktok_t* toks, int cou
     int cur;
     int k;
     int v;
+    size_t key_len;
 
     if (!json || !toks || !key) return -1;
     if (obj_tok < 0 || obj_tok >= count) return -1;
     if (toks[obj_tok].type != JSTOK_OBJECT) return -1;
 
+    key_len = strlen(key);
     cur = obj_tok + 1;
     for (pair = 0; pair < toks[obj_tok].size; pair++) {
         k = cur;
         v = k + 1;
         if (v >= count) return -1;
 
-        if (toks[k].type == JSTOK_STRING && jstok_eq(json, &toks[k], key)) {
-            return v;
+        if (toks[k].type == JSTOK_STRING) {
+            int ks = toks[k].start;
+            int ke = toks[k].end;
+            if (ks >= 0 && ke >= ks) {
+                size_t span_len = (size_t)(ke - ks);
+                if (span_len == key_len && memcmp(json + ks, key, key_len) == 0) {
+                    return v;
+                }
+            }
         }
 
         cur = jstok_skip(toks, count, v);
@@ -1274,12 +1329,8 @@ JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos,
             line_len--;
         }
 
-        int is_data = 0;
-        if (line_len >= 5 && memcmp(buf + line_start, "data:", 5) == 0) {
-            is_data = 1;
-        }
-
-        if (is_data) {
+        if (line_len >= 5 && buf[line_start] == 'd' && buf[line_start + 1] == 'a' && buf[line_start + 2] == 't' &&
+            buf[line_start + 3] == 'a' && buf[line_start + 4] == ':') {
             size_t payload_off = 5;
             if (payload_off < line_len && buf[line_start + payload_off] == ' ') {
                 payload_off++;
