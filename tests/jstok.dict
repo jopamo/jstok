@@ -1,0 +1,28 @@
+# JSON keywords and symbols
+"{"
+"}"
+"["
+"]"
+"," 
+":"
+"\""
+"true"
+"false"
+"null"
+
+# Escapes
+"\\"
+"\\/"
+"\\b"
+"\\f"
+"\\n"
+"\\r"
+"\\t"
+"\\u"
+
+# SSE keywords
+"data:"
+"event:"
+"id:"
+"retry:"
+": "
