@@ -194,10 +194,38 @@ JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos,
 #include <string.h>
 
 /* Minimal helpers, avoid heavy deps */
-static int jstok_is_space(char c) { return (c == ' ' || c == '\t' || c == '\n' || c == '\r'); }
+#define jstok_is_space(c) ((c) == ' ' || (c) == '\t' || (c) == '\n' || (c) == '\r')
 static int jstok_is_digit(char c) { return (c >= '0' && c <= '9'); }
 static int jstok_is_hex(char c) { return (jstok_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')); }
 static int jstok_is_delim(char c) { return (c == ',' || c == ']' || c == '}' || jstok_is_space(c)); }
+
+enum {
+    JSTOK_CC_OTHER = 0,
+    JSTOK_CC_SPACE = 1,
+    JSTOK_CC_LBRACE = 2,
+    JSTOK_CC_RBRACE = 3,
+    JSTOK_CC_LBRACKET = 4,
+    JSTOK_CC_RBRACKET = 5,
+    JSTOK_CC_COLON = 6,
+    JSTOK_CC_COMMA = 7,
+    JSTOK_CC_QUOTE = 8
+};
+
+static const unsigned char jstok_char_class[256] = {
+    [' '] = JSTOK_CC_SPACE,
+    ['\t'] = JSTOK_CC_SPACE,
+    ['\n'] = JSTOK_CC_SPACE,
+    ['\r'] = JSTOK_CC_SPACE,
+    ['{'] = JSTOK_CC_LBRACE,
+    ['}'] = JSTOK_CC_RBRACE,
+    ['['] = JSTOK_CC_LBRACKET,
+    [']'] = JSTOK_CC_RBRACKET,
+    [':'] = JSTOK_CC_COLON,
+    [','] = JSTOK_CC_COMMA,
+    ['"'] = JSTOK_CC_QUOTE
+};
+
+#define jstok_classify(c) (jstok_char_class[(unsigned char)(c)])
 
 static void jstok_set_error(jstok_parser* p, int code, int pos) {
     p->error_code = code;
@@ -276,6 +304,18 @@ static void jstok_inc_container_size(jstok_parser* p, jstoktok_t* toks) {
     toks[fr->tok].size++;
 }
 
+static void jstok_rollback_accept_value(jstok_parser* p, jstoktok_t* toks, jstok_frame_t* fr, jstok_state_t saved_st,
+                                        int saved_root_done) {
+    if (fr) {
+        fr->st = saved_st;
+        if (toks && fr->tok >= 0 && toks[fr->tok].size > 0) {
+            toks[fr->tok].size--;
+        }
+    } else {
+        p->root_done = saved_root_done;
+    }
+}
+
 static int jstok_accept_value(jstok_parser* p, jstoktok_t* toks) {
     jstok_frame_t* fr = jstok_top(p);
 
@@ -342,7 +382,17 @@ static int jstok_parse_string_token(jstok_parser* p, const char* json, int json_
     p->pos++; /* after opening quote */
 
     while (p->pos < json_len) {
-        char c = json[p->pos];
+        char c;
+
+        while (p->pos < json_len) {
+            c = json[p->pos];
+            if (c == '"' || c == '\\' || (unsigned char)c < 0x20) break;
+            p->pos++;
+        }
+
+        if (p->pos >= json_len) break;
+
+        c = json[p->pos];
 
         if ((unsigned char)c < 0x20) {
             jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos);
@@ -403,9 +453,11 @@ static int jstok_parse_string_token(jstok_parser* p, const char* json, int json_
 
 static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, const char* lit, unsigned flags) {
     int i = 0;
+    int start = p->pos;
     while (lit[i] != '\0') {
         if (p->pos + i >= json_len) {
             jstok_set_error(p, JSTOK_ERROR_PART, p->pos + i);
+            p->pos = start; /* Rewind for resume */
             return JSTOK_ERROR_PART;
         }
         if (json[p->pos + i] != lit[i]) {
@@ -418,6 +470,7 @@ static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, 
     if (p->pos + i >= json_len) {
         if ((flags & JSTOK_PARSE_FINAL) == 0u) {
             jstok_set_error(p, JSTOK_ERROR_PART, p->pos + i);
+            p->pos = start; /* Rewind for resume */
             return JSTOK_ERROR_PART;
         }
         return i;
@@ -558,13 +611,20 @@ static int jstok_start_container(jstok_parser* p, const char* json, int json_len
     int parent_idx = -1;
     int tok_idx;
     jstok_state_t st;
+    jstok_state_t saved_parent_st = 0;
+    int saved_root_done = p->root_done;
+    int saved_pos = p->pos;
+    int toknext_before = p->toknext;
     jstok_frame_t* fr;
 
     (void)json;
     (void)json_len;
 
     fr = jstok_top(p);
-    if (fr) parent_idx = fr->tok;
+    if (fr) {
+        parent_idx = fr->tok;
+        saved_parent_st = fr->st;
+    }
 
     /* This container token is a value for its parent */
     {
@@ -573,14 +633,25 @@ static int jstok_start_container(jstok_parser* p, const char* json, int json_len
     }
 
     tok_idx = jstok_new_token(p, toks, max_tokens, type, p->pos, -1, parent_idx);
-    if (tok_idx < 0) return tok_idx;
+    if (tok_idx < 0) {
+        jstok_rollback_accept_value(p, toks, fr, saved_parent_st, saved_root_done);
+        if (tok_idx == JSTOK_ERROR_NOMEM) {
+            p->pos = saved_pos;
+        }
+        return tok_idx;
+    }
 
     st = (type == JSTOK_OBJECT) ? JSTOK_ST_OBJ_KEY_OR_END : JSTOK_ST_ARR_VALUE_OR_END;
 
     /* Push new frame, tok_idx is -1 in count-only but that is fine */
     {
         int pushed = jstok_push(p, type, st, toks ? tok_idx : -1);
-        if (pushed < 0) return pushed;
+        if (pushed < 0) {
+            p->toknext = toknext_before;
+            jstok_rollback_accept_value(p, toks, fr, saved_parent_st, saved_root_done);
+            p->pos = saved_pos;
+            return pushed;
+        }
     }
 
     p->pos++; /* consume '{' or '[' */
@@ -662,12 +733,14 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
 
     while (p->pos < json_len) {
         char c;
+        unsigned char cls;
         jstok_frame_t* fr;
         int parent_idx;
 
         c = json[p->pos];
+        cls = jstok_classify(c);
 
-        if (jstok_is_space(c)) {
+        if (cls == JSTOK_CC_SPACE) {
             p->pos++;
             continue;
         }
@@ -675,23 +748,21 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
         fr = jstok_top(p);
         parent_idx = fr ? fr->tok : -1;
 
-        if (c == '{') {
-            /* Container start also calls accept_value internally.
-               Ideally we'd rollback there too, but start_container is atomic enough
-               (only fails on depth/mem). PART on '{' isn't possible (1 char). */
+        if (cls == JSTOK_CC_LBRACE) {
+            /* Container start also calls accept_value internally and rolls back on failure. */
             r = jstok_start_container(p, json, json_len, tokens, max_tokens, JSTOK_OBJECT);
             if (r < 0) return r;
             continue;
         }
 
-        if (c == '[') {
+        if (cls == JSTOK_CC_LBRACKET) {
             r = jstok_start_container(p, json, json_len, tokens, max_tokens, JSTOK_ARRAY);
             if (r < 0) return r;
             continue;
         }
 
-        if (c == '}' || c == ']') {
-            if (c == '}') {
+        if (cls == JSTOK_CC_RBRACE || cls == JSTOK_CC_RBRACKET) {
+            if (cls == JSTOK_CC_RBRACE) {
                 r = jstok_end_container(p, json, json_len, tokens, JSTOK_OBJECT, '}');
             } else {
                 r = jstok_end_container(p, json, json_len, tokens, JSTOK_ARRAY, ']');
@@ -700,7 +771,7 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
             continue;
         }
 
-        if (c == ':') {
+        if (cls == JSTOK_CC_COLON) {
             if (!fr || fr->type != JSTOK_OBJECT || fr->st != JSTOK_ST_OBJ_COLON) {
                 jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos);
                 return JSTOK_ERROR_INVAL;
@@ -710,7 +781,7 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
             continue;
         }
 
-        if (c == ',') {
+        if (cls == JSTOK_CC_COMMA) {
             if (!fr) {
                 jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos);
                 return JSTOK_ERROR_INVAL;
@@ -734,7 +805,7 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
             }
         }
 
-        if (c == '"') {
+        if (cls == JSTOK_CC_QUOTE) {
             int tok_idx;
 
             /* If we're in an object expecting a key, treat as key */
@@ -758,20 +829,16 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
             {
                 jstok_state_t saved_st = fr ? fr->st : 0;
                 int saved_root_done = p->root_done;
+                int saved_pos = p->pos;
 
                 r = jstok_accept_value(p, tokens);
                 if (r < 0) return r;
 
                 tok_idx = jstok_parse_string_token(p, json, json_len, tokens, max_tokens, parent_idx);
                 if (tok_idx < 0) {
-                    if (tok_idx == JSTOK_ERROR_PART) {
-                        /* Rollback accept_value side effects */
-                        if (fr) {
-                            fr->st = saved_st;
-                            if (tokens && fr->tok >= 0) tokens[fr->tok].size--;
-                        } else {
-                            p->root_done = saved_root_done;
-                        }
+                    jstok_rollback_accept_value(p, tokens, fr, saved_st, saved_root_done);
+                    if (tok_idx == JSTOK_ERROR_PART || tok_idx == JSTOK_ERROR_NOMEM) {
+                        p->pos = saved_pos;
                     }
                     return tok_idx;
                 }
@@ -783,20 +850,16 @@ JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, js
         {
             jstok_state_t saved_st = fr ? fr->st : 0;
             int saved_root_done = p->root_done;
+            int saved_pos = p->pos;
 
             r = jstok_accept_value(p, tokens);
             if (r < 0) return r;
 
             r = jstok_parse_primitive_token(p, json, json_len, tokens, max_tokens, parent_idx, flags);
             if (r < 0) {
-                if (r == JSTOK_ERROR_PART) {
-                    /* Rollback accept_value side effects */
-                    if (fr) {
-                        fr->st = saved_st;
-                        if (tokens && fr->tok >= 0) tokens[fr->tok].size--;
-                    } else {
-                        p->root_done = saved_root_done;
-                    }
+                jstok_rollback_accept_value(p, tokens, fr, saved_st, saved_root_done);
+                if (r == JSTOK_ERROR_PART || r == JSTOK_ERROR_NOMEM) {
+                    p->pos = saved_pos;
                 }
                 return r;
             }
@@ -969,7 +1032,8 @@ JSTOK_API int jstok_object_get(const char* json, const jstoktok_t* toks, int cou
 
 JSTOK_API int jstok_atoi64(const char* json, const jstoktok_t* t, long long* out) {
     jstok_span_t sp;
-    long long val;
+    unsigned long long mag;
+    unsigned long long limit;
     size_t i;
     int neg;
 
@@ -979,7 +1043,7 @@ JSTOK_API int jstok_atoi64(const char* json, const jstoktok_t* t, long long* out
     sp = jstok_span(json, t);
     if (!sp.p || sp.n == 0) return -1;
 
-    val = 0;
+    mag = 0;
     i = 0;
     neg = 0;
 
@@ -989,24 +1053,29 @@ JSTOK_API int jstok_atoi64(const char* json, const jstoktok_t* t, long long* out
         if (i >= sp.n) return -1;
     }
 
+    limit = neg ? ((unsigned long long)LLONG_MAX + 1ULL) : (unsigned long long)LLONG_MAX;
+
     for (; i < sp.n; i++) {
         char c = sp.p[i];
-        long long digit;
+        unsigned long long digit;
         if (c < '0' || c > '9') return -1;
-        digit = (long long)(c - '0');
+        digit = (unsigned long long)(c - '0');
 
-        if (!neg) {
-            if (val > LLONG_MAX / 10) return -1;
-            if (val == LLONG_MAX / 10 && digit > (LLONG_MAX % 10)) return -1;
-            val = val * 10 + digit;
-        } else {
-            if (val < LLONG_MIN / 10) return -1;
-            if (val == LLONG_MIN / 10 && digit > -(LLONG_MIN % 10)) return -1;
-            val = val * 10 - digit;
-        }
+        if (mag > limit / 10ULL) return -1;
+        if (mag == limit / 10ULL && digit > (limit % 10ULL)) return -1;
+        mag = mag * 10ULL + digit;
     }
 
-    *out = val;
+    if (neg) {
+        if (mag == ((unsigned long long)LLONG_MAX + 1ULL)) {
+            *out = LLONG_MIN;
+        } else {
+            *out = -(long long)mag;
+        }
+    } else {
+        *out = (long long)mag;
+    }
+
     return 0;
 }
 

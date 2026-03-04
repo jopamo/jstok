@@ -534,6 +534,49 @@ int test_memory_bounds(void) {
     return 1;
 }
 
+int test_memory_retry_after_nomen(void) {
+    jstok_parser p;
+    jstoktok_t t[8];
+    const char* json_num = "[1]";
+    const char* json_nested = "[[]]";
+    int r;
+
+    /* Primitive value fails token allocation after accept_value(). */
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, json_num, (int)strlen(json_num), t, 1, JSTOK_PARSE_FINAL);
+    ASSERT_EQ(r, JSTOK_ERROR_NOMEM);
+    ASSERT_EQ(p.pos, 1);
+    ASSERT_EQ(p.depth, 1);
+    ASSERT_EQ(p.toknext, 1);
+    ASSERT(t[0].type == JSTOK_ARRAY);
+    ASSERT_EQ(t[0].size, 0);
+
+    r = jstok_parse_ex(&p, json_num, (int)strlen(json_num), t, 8, JSTOK_PARSE_FINAL);
+    ASSERT_EQ(r, 2);
+    ASSERT(t[0].type == JSTOK_ARRAY);
+    ASSERT_EQ(t[0].size, 1);
+    ASSERT(t[1].type == JSTOK_PRIMITIVE);
+
+    /* Container start fails token allocation after accept_value(). */
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, json_nested, (int)strlen(json_nested), t, 1, JSTOK_PARSE_FINAL);
+    ASSERT_EQ(r, JSTOK_ERROR_NOMEM);
+    ASSERT_EQ(p.pos, 1);
+    ASSERT_EQ(p.depth, 1);
+    ASSERT_EQ(p.toknext, 1);
+    ASSERT(t[0].type == JSTOK_ARRAY);
+    ASSERT_EQ(t[0].size, 0);
+
+    r = jstok_parse_ex(&p, json_nested, (int)strlen(json_nested), t, 8, JSTOK_PARSE_FINAL);
+    ASSERT_EQ(r, 2);
+    ASSERT(t[0].type == JSTOK_ARRAY);
+    ASSERT_EQ(t[0].size, 1);
+    ASSERT(t[1].type == JSTOK_ARRAY);
+    ASSERT_EQ(t[1].size, 0);
+
+    return 1;
+}
+
 int test_count_only_correctness(void) {
     jstok_parser p;
     jstoktok_t t[100];
@@ -1008,6 +1051,7 @@ int main(void) {
     TEST(syntax_multiroot);
 
     TEST(memory_bounds);
+    TEST(memory_retry_after_nomen);
     TEST(count_only_correctness);
 
 #ifdef JSTOK_PARENT_LINKS
