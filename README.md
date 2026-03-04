@@ -133,14 +133,6 @@ Everywhere else:
 
 This avoids multiple-definition issues while keeping everything header-only.
 
-Compatibility and release references:
-
-- `API_SURFACE.md`
-- `MACRO_COMPATIBILITY.md`
-- `API_BREAK_CHECKLIST.md`
-- `RELEASE_CHECKLIST.md`
-- `CHANGELOG.md`
-
 ---
 
 ### 2. Basic Parsing
