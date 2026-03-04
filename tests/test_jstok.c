@@ -1,5 +1,6 @@
 /* Enforce strict JSON compliance for tests to verify standard behavior */
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -494,6 +495,32 @@ int test_count_only_correctness(void) {
 
 #ifndef JSTOK_NO_HELPERS
 
+int test_helpers_atoi64_bounds(void) {
+    jstok_parser p;
+    jstoktok_t t[8];
+    const char* json = "[9223372036854775807,-9223372036854775808,9223372036854775808,-9223372036854775809]";
+    long long n;
+
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, json, (int)strlen(json), t, 8) == 5);
+
+    ASSERT(jstok_atoi64(json, &t[1], &n) == 0);
+    ASSERT(n == LLONG_MAX);
+
+    ASSERT(jstok_atoi64(json, &t[2], &n) == 0);
+    ASSERT(n == LLONG_MIN);
+
+    n = 123;
+    ASSERT(jstok_atoi64(json, &t[3], &n) == -1);
+    ASSERT(n == 123);
+
+    n = 456;
+    ASSERT(jstok_atoi64(json, &t[4], &n) == -1);
+    ASSERT(n == 456);
+
+    return 1;
+}
+
 int test_helpers_edge_cases(void) {
     jstok_parser p;
 
@@ -864,6 +891,7 @@ int main(void) {
     TEST(count_only_correctness);
 
 #ifndef JSTOK_NO_HELPERS
+    TEST(helpers_atoi64_bounds);
     TEST(helpers_edge_cases);
     TEST(helpers_extended);
     TEST(unescape_unicode);
