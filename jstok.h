@@ -182,6 +182,7 @@ JSTOK_API jstok_sse_res jstok_sse_next(const char* buf, size_t len, size_t* pos,
 /* -------------------------------------------------------------------------- */
 #ifndef JSTOK_HEADER
 
+#include <limits.h>
 #include <string.h>
 
 /* Minimal helpers, avoid heavy deps */
@@ -940,9 +941,9 @@ JSTOK_API int jstok_object_get(const char* json, const jstoktok_t* toks, int cou
 
 JSTOK_API int jstok_atoi64(const char* json, const jstoktok_t* t, long long* out) {
     jstok_span_t sp;
-    long long sign;
     long long val;
     size_t i;
+    int neg;
 
     if (!json || !t || !out) return -1;
     if (t->type != JSTOK_PRIMITIVE) return -1;
@@ -950,23 +951,34 @@ JSTOK_API int jstok_atoi64(const char* json, const jstoktok_t* t, long long* out
     sp = jstok_span(json, t);
     if (!sp.p || sp.n == 0) return -1;
 
-    sign = 1;
     val = 0;
     i = 0;
+    neg = 0;
 
     if (sp.p[0] == '-') {
-        sign = -1;
+        neg = 1;
         i = 1;
         if (i >= sp.n) return -1;
     }
 
     for (; i < sp.n; i++) {
         char c = sp.p[i];
+        long long digit;
         if (c < '0' || c > '9') return -1;
-        val = val * 10 + (long long)(c - '0');
+        digit = (long long)(c - '0');
+
+        if (!neg) {
+            if (val > LLONG_MAX / 10) return -1;
+            if (val == LLONG_MAX / 10 && digit > (LLONG_MAX % 10)) return -1;
+            val = val * 10 + digit;
+        } else {
+            if (val < LLONG_MIN / 10) return -1;
+            if (val == LLONG_MIN / 10 && digit > -(LLONG_MIN % 10)) return -1;
+            val = val * 10 - digit;
+        }
     }
 
-    *out = val * sign;
+    *out = val;
     return 0;
 }
 
