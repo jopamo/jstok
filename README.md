@@ -85,6 +85,32 @@ pkg-config --cflags jstok
 
 ---
 
+### Consumed by `desid`
+
+`desid` depends on installed `jstok` artifacts (`jstok.h` + `jstok.pc`) via `pkg-config`.
+
+Recommended integration pattern:
+
+1. Install `jstok` to a prefix used by your workspace.
+2. Ensure that prefix is visible to `pkg-config`.
+3. Build `desid` against the installed package instead of sibling source paths.
+
+Example:
+
+```bash
+# in jstok repo
+meson setup build --prefix /opt/desi
+meson compile -C build
+meson install -C build
+
+# in desid repo
+export PKG_CONFIG_PATH=/opt/desi/lib/pkgconfig:${PKG_CONFIG_PATH}
+meson setup build
+meson compile -C build
+```
+
+---
+
 ## Usage
 
 ### 1. Integration Model
@@ -106,6 +132,14 @@ Everywhere else:
 ```
 
 This avoids multiple-definition issues while keeping everything header-only.
+
+Compatibility and release references:
+
+- `API_SURFACE.md`
+- `MACRO_COMPATIBILITY.md`
+- `API_BREAK_CHECKLIST.md`
+- `RELEASE_CHECKLIST.md`
+- `CHANGELOG.md`
 
 ---
 
@@ -147,7 +181,31 @@ int main(void) {
 
 ---
 
-### 3. Helper API Examples
+### 3. Incremental / Streaming Parsing
+
+Use `jstok_parse_ex` for chunked input. Pass `0` while more bytes may arrive,
+then pass `JSTOK_PARSE_FINAL` on the last call.
+
+```c
+int r = jstok_parse_ex(&parser, buf, (int)len, tokens, 32, 0);
+if (r == JSTOK_ERROR_PART) {
+    // need more bytes
+}
+
+r = jstok_parse_ex(&parser, buf, (int)len, tokens, 32, JSTOK_PARSE_FINAL);
+```
+
+Contract:
+
+* `jstok_parse(...)` is equivalent to
+  `jstok_parse_ex(..., JSTOK_PARSE_FINAL)`.
+* In incremental mode (`flags == 0`), primitives ending exactly at the current
+  buffer boundary may return `JSTOK_ERROR_PART` until a delimiter is seen or
+  final mode is requested.
+
+---
+
+### 4. Helper API Examples
 
 #### Object Lookup
 
@@ -187,7 +245,7 @@ int name_idx = jstok_path(
 
 ---
 
-### 4. Server-Sent Events (SSE)
+### 5. Server-Sent Events (SSE)
 
 Extract JSON payloads from an SSE stream without copying:
 

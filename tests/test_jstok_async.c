@@ -206,6 +206,34 @@ int test_async_split_tokens_deep(void) {
     return 1;
 }
 
+int test_async_final_flag_root_primitive(void) {
+    const char* num = "123";
+    const char* lit = "true";
+    jstok_parser p;
+    jstoktok_t tokens[8];
+    int r;
+
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, num, (int)strlen(num), tokens, 8, 0);
+    ASSERT(r == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    r = jstok_parse_ex(&p, num, (int)strlen(num), tokens, 8, JSTOK_PARSE_FINAL);
+    ASSERT(r == 1);
+    ASSERT(tokens[0].type == JSTOK_PRIMITIVE);
+
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, lit, (int)strlen(lit), tokens, 8, 0);
+    ASSERT(r == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    r = jstok_parse_ex(&p, lit, (int)strlen(lit), tokens, 8, JSTOK_PARSE_FINAL);
+    ASSERT(r == 1);
+    ASSERT(tokens[0].type == JSTOK_PRIMITIVE);
+
+    return 1;
+}
+
 /* -------------------------------------------------------------------------- */
 /* SSE Async Tests */
 /* -------------------------------------------------------------------------- */
@@ -270,6 +298,7 @@ int main(void) {
     TEST(async_random_chunks);
     TEST(async_split_tokens);
     TEST(async_split_tokens_deep);
+    TEST(async_final_flag_root_primitive);
     TEST(sse_fragmentation);
 
     printf("\nTests run: %d, Failed: %d\n", tests_run, tests_failed);

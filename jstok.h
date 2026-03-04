@@ -117,6 +117,14 @@ typedef struct jstok_parser {
 
 JSTOK_API void jstok_init(jstok_parser* p);
 
+typedef enum {
+    /* Input chunk is the final end-of-stream segment. */
+    JSTOK_PARSE_FINAL = 1u << 0
+} jstok_parse_flags_t;
+
+JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, jstoktok_t* tokens, int max_tokens,
+                             unsigned flags);
+
 JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstoktok_t* tokens, int max_tokens);
 
 #ifndef JSTOK_NO_HELPERS
@@ -393,7 +401,7 @@ static int jstok_parse_string_token(jstok_parser* p, const char* json, int json_
     return JSTOK_ERROR_PART;
 }
 
-static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, const char* lit) {
+static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, const char* lit, unsigned flags) {
     int i = 0;
     while (lit[i] != '\0') {
         if (p->pos + i >= json_len) {
@@ -406,15 +414,22 @@ static int jstok_parse_literal(jstok_parser* p, const char* json, int json_len, 
         }
         i++;
     }
-    /* Next must be delimiter or EOF */
-    if (p->pos + i < json_len && !jstok_is_delim(json[p->pos + i])) {
+    /* Need delimiter, or final EOF when caller confirms end-of-stream. */
+    if (p->pos + i >= json_len) {
+        if ((flags & JSTOK_PARSE_FINAL) == 0u) {
+            jstok_set_error(p, JSTOK_ERROR_PART, p->pos + i);
+            return JSTOK_ERROR_PART;
+        }
+        return i;
+    }
+    if (!jstok_is_delim(json[p->pos + i])) {
         jstok_set_error(p, JSTOK_ERROR_INVAL, p->pos + i);
         return JSTOK_ERROR_INVAL;
     }
     return i;
 }
 
-static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_len, int* out_end) {
+static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_len, int* out_end, unsigned flags) {
     int i = p->pos;
 
     if (i >= json_len) {
@@ -480,11 +495,12 @@ static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_l
         while (i < json_len && jstok_is_digit(json[i])) i++;
     }
 
-    /*
-     * EOF after a number is valid only for top-level values.
-     * Inside objects/arrays, EOF means we're missing a delimiter/closer.
-     */
+    /* EOF finalizes a number only when caller marks this chunk as final. */
     if (i >= json_len) {
+        if ((flags & JSTOK_PARSE_FINAL) == 0u) {
+            jstok_set_error(p, JSTOK_ERROR_PART, i);
+            return JSTOK_ERROR_PART;
+        }
         if (p->depth != 0) {
             jstok_set_error(p, JSTOK_ERROR_PART, i);
             return JSTOK_ERROR_PART;
@@ -503,7 +519,7 @@ static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_l
 }
 
 static int jstok_parse_primitive_token(jstok_parser* p, const char* json, int json_len, jstoktok_t* toks,
-                                       int max_tokens, int parent) {
+                                       int max_tokens, int parent, unsigned flags) {
     int start = p->pos;
     int n, endpos;
 
@@ -513,24 +529,24 @@ static int jstok_parse_primitive_token(jstok_parser* p, const char* json, int js
     }
 
     if (json[p->pos] == 't') {
-        n = jstok_parse_literal(p, json, json_len, "true");
+        n = jstok_parse_literal(p, json, json_len, "true", flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
     } else if (json[p->pos] == 'f') {
-        n = jstok_parse_literal(p, json, json_len, "false");
+        n = jstok_parse_literal(p, json, json_len, "false", flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
     } else if (json[p->pos] == 'n') {
-        n = jstok_parse_literal(p, json, json_len, "null");
+        n = jstok_parse_literal(p, json, json_len, "null", flags);
         if (n < 0) return n;
         p->pos += n;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
     } else {
         /* number */
         endpos = 0;
-        n = jstok_parse_number_span(p, json, json_len, &endpos);
+        n = jstok_parse_number_span(p, json, json_len, &endpos, flags);
         if (n < 0) return n;
         p->pos = endpos;
         return jstok_new_token(p, toks, max_tokens, JSTOK_PRIMITIVE, start, p->pos, parent);
@@ -631,7 +647,8 @@ static int jstok_end_container(jstok_parser* p, const char* json, int json_len, 
     return 0;
 }
 
-JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstoktok_t* tokens, int max_tokens) {
+JSTOK_API int jstok_parse_ex(jstok_parser* p, const char* json, int json_len, jstoktok_t* tokens, int max_tokens,
+                             unsigned flags) {
     int r;
 
     if (!p || !json || json_len < 0) {
@@ -770,7 +787,7 @@ JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstok
             r = jstok_accept_value(p, tokens);
             if (r < 0) return r;
 
-            r = jstok_parse_primitive_token(p, json, json_len, tokens, max_tokens, parent_idx);
+            r = jstok_parse_primitive_token(p, json, json_len, tokens, max_tokens, parent_idx, flags);
             if (r < 0) {
                 if (r == JSTOK_ERROR_PART) {
                     /* Rollback accept_value side effects */
@@ -808,6 +825,10 @@ JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstok
 
     /* Success: tokens used or required token count */
     return p->toknext;
+}
+
+JSTOK_API int jstok_parse(jstok_parser* p, const char* json, int json_len, jstoktok_t* tokens, int max_tokens) {
+    return jstok_parse_ex(p, json, json_len, tokens, max_tokens, JSTOK_PARSE_FINAL);
 }
 
 #ifndef JSTOK_NO_HELPERS

@@ -442,6 +442,40 @@ int test_number_errors(void) {
     return 1;
 }
 
+int test_streaming_final_flag(void) {
+    jstok_parser p;
+    jstoktok_t t[10];
+    int r;
+
+    const char* num = "123";
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, num, (int)strlen(num), t, 10, 0);
+    ASSERT(r == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    r = jstok_parse_ex(&p, num, (int)strlen(num), t, 10, JSTOK_PARSE_FINAL);
+    ASSERT(r == 1);
+    ASSERT(t[0].type == JSTOK_PRIMITIVE);
+
+    const char* lit = "true";
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, lit, (int)strlen(lit), t, 10, 0);
+    ASSERT(r == JSTOK_ERROR_PART);
+    ASSERT(p.pos == 0);
+
+    r = jstok_parse_ex(&p, lit, (int)strlen(lit), t, 10, JSTOK_PARSE_FINAL);
+    ASSERT(r == 1);
+    ASSERT(t[0].type == JSTOK_PRIMITIVE);
+
+    const char* num_ws = "123 ";
+    jstok_init(&p);
+    r = jstok_parse_ex(&p, num_ws, (int)strlen(num_ws), t, 10, 0);
+    ASSERT(r == 1);
+    ASSERT(t[0].type == JSTOK_PRIMITIVE);
+
+    return 1;
+}
+
 // 3.7 Multiple Root Values
 // Note: This requires JSTOK_STRICT to be effective for strictly one value.
 // But standard parser stops after one top-level value if it's not EOF?
@@ -969,6 +1003,7 @@ int main(void) {
     TEST(syntax_errors_extended);
     TEST(string_errors);
     TEST(number_errors);
+    TEST(streaming_final_flag);
 
     TEST(syntax_multiroot);
 

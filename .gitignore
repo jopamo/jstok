@@ -1,7 +1,5 @@
-DESIGN.md
-HACKING.md
-sse-spec.md
+*.md
+!README.md
 docs/
 build*
-TODO.md
 doc/
