@@ -302,15 +302,16 @@ int test_unescape_unicode(void) {
 
     jstoktok_t t[10];
 
-    // A: U+0041, Snowman: U+2603, Euro: U+20AC, Custom: U+07FF (edge of 2-byte)
+    // A: U+0041, Snowman: U+2603, Euro: U+20AC, Custom: U+07FF (edge of 2-byte), G clef: U+1D11E
 
-    const char* json = "[\"\\u0041\", \"\\u2603\", \"\\u20AC\", \"\\u07FF\"]";
+    const char* json = "[\"\\u0041\", \"\\u2603\", \"\\u20AC\", \"\\u07FF\", \"\\uD834\\uDD1E\"]";
+    const char* bad = "[\"\\uD834\", \"\\uDD1E\", \"\\uD834\\u0041\"]";
 
     jstok_init(&p);
 
     int count = jstok_parse(&p, json, (int)strlen(json), t, 10);
 
-    ASSERT(count == 5);
+    ASSERT(count == 6);
 
     char buf[16];
 
@@ -337,6 +338,21 @@ int test_unescape_unicode(void) {
     ASSERT(len == 2);
 
     ASSERT((unsigned char)buf[0] == 0xDF && (unsigned char)buf[1] == 0xBF);
+
+    // 4-byte UTF-8 (U+1D11E from surrogate pair)
+    ASSERT(jstok_unescape(json, &t[5], buf, sizeof(buf), &len) == 0);
+    ASSERT(len == 4);
+    ASSERT((unsigned char)buf[0] == 0xF0 && (unsigned char)buf[1] == 0x9D && (unsigned char)buf[2] == 0x84 &&
+           (unsigned char)buf[3] == 0x9E);
+
+    jstok_init(&p);
+    count = jstok_parse(&p, bad, (int)strlen(bad), t, 10);
+    ASSERT(count == 4);
+
+    // Invalid surrogate usage should be rejected
+    ASSERT(jstok_unescape(bad, &t[1], buf, sizeof(buf), &len) == -1);  // lone high surrogate
+    ASSERT(jstok_unescape(bad, &t[2], buf, sizeof(buf), &len) == -1);  // lone low surrogate
+    ASSERT(jstok_unescape(bad, &t[3], buf, sizeof(buf), &len) == -1);  // high surrogate + non-low surrogate
 
     return 1;
 }
@@ -502,6 +518,59 @@ int test_count_only_correctness(void) {
 
     return 1;
 }
+
+#ifdef JSTOK_PARENT_LINKS
+
+int test_parent_links(void) {
+    jstok_parser p;
+    jstoktok_t t[20];
+    const char* json = "{\"a\":[1,{\"b\":2}],\"c\":{\"d\":[3]}}";
+    int count;
+
+    jstok_init(&p);
+    count = jstok_parse(&p, json, (int)strlen(json), t, 20);
+    ASSERT(count == 12);
+
+    ASSERT(t[0].type == JSTOK_OBJECT);
+    ASSERT(t[0].parent == -1);
+
+    ASSERT(t[1].type == JSTOK_STRING);
+    ASSERT(t[1].parent == 0);
+
+    ASSERT(t[2].type == JSTOK_ARRAY);
+    ASSERT(t[2].parent == 0);
+
+    ASSERT(t[3].type == JSTOK_PRIMITIVE);
+    ASSERT(t[3].parent == 2);
+
+    ASSERT(t[4].type == JSTOK_OBJECT);
+    ASSERT(t[4].parent == 2);
+
+    ASSERT(t[5].type == JSTOK_STRING);
+    ASSERT(t[5].parent == 4);
+
+    ASSERT(t[6].type == JSTOK_PRIMITIVE);
+    ASSERT(t[6].parent == 4);
+
+    ASSERT(t[7].type == JSTOK_STRING);
+    ASSERT(t[7].parent == 0);
+
+    ASSERT(t[8].type == JSTOK_OBJECT);
+    ASSERT(t[8].parent == 0);
+
+    ASSERT(t[9].type == JSTOK_STRING);
+    ASSERT(t[9].parent == 8);
+
+    ASSERT(t[10].type == JSTOK_ARRAY);
+    ASSERT(t[10].parent == 8);
+
+    ASSERT(t[11].type == JSTOK_PRIMITIVE);
+    ASSERT(t[11].parent == 10);
+
+    return 1;
+}
+
+#endif
 
 /* -------------------------------------------------------------------------- */
 
@@ -905,6 +974,10 @@ int main(void) {
 
     TEST(memory_bounds);
     TEST(count_only_correctness);
+
+#ifdef JSTOK_PARENT_LINKS
+    TEST(parent_links);
+#endif
 
 #ifndef JSTOK_NO_HELPERS
     TEST(helpers_atoi64_bounds);

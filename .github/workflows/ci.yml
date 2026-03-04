@@ -89,3 +89,62 @@ jobs:
         with:
           name: logs-${{ matrix.cfg.name }}
           path: ${{ matrix.cfg.build_dir }}/meson-logs/testlog.txt
+
+  install-uninstall-check:
+    name: install-uninstall-check
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y meson ninja-build pkgconf-pkg-config gcc
+
+      - name: Install to staging prefix
+        run: |
+          meson setup build-install --prefix /usr
+          meson compile -C build-install
+          meson install -C build-install --destdir "$PWD/stage"
+
+          test -f "$PWD/stage/usr/include/jstok.h"
+          PC_FILE=$(find "$PWD/stage" -type f -name jstok.pc | head -n1)
+          test -n "$PC_FILE"
+          PC_DIR=$(dirname "$PC_FILE")
+
+          PKG_CONFIG_PATH="$PC_DIR" pkg-config --exists jstok
+          PKG_CONFIG_PATH="$PC_DIR" pkg-config --cflags jstok | grep -q -- "-I"
+
+      - name: Uninstall verification (staged prefix cleanup)
+        run: |
+          PC_DIR=$(dirname "$(find "$PWD/stage" -type f -name jstok.pc | head -n1)")
+          rm -rf "$PWD/stage"
+          test ! -e "$PWD/stage/usr/include/jstok.h"
+
+          if PKG_CONFIG_PATH="$PC_DIR" pkg-config --exists jstok; then
+            echo "jstok should not resolve after staged uninstall cleanup"
+            exit 1
+          fi
+
+  fuzz-smoke:
+    name: fuzz-smoke
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y clang llvm meson ninja-build compiler-rt
+
+      - name: Build fuzz target
+        env:
+          CC: clang
+        run: |
+          meson setup build-fuzz
+          meson compile -C build-fuzz fuzz_jstok
+
+      - name: Run fuzz budget
+        run: |
+          # Keep CI runtime bounded while still exercising fuzz target in every PR.
+          ./build-fuzz/fuzz_jstok -max_total_time=20

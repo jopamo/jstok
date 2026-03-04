@@ -1067,9 +1067,9 @@ JSTOK_API int jstok_unescape(const char* json, const jstoktok_t* t, char* out, s
         }
 
         if (c == 'u') {
-            int hv;
             int v0, v1, v2, v3;
             unsigned code;
+            unsigned low;
 
             if (i + 4 >= sp.n) return -1;
 
@@ -1080,7 +1080,29 @@ JSTOK_API int jstok_unescape(const char* json, const jstoktok_t* t, char* out, s
             if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) return -1;
 
             code = (unsigned)((v0 << 12) | (v1 << 8) | (v2 << 4) | v3);
-            i += 4;
+
+            if (code >= 0xD800u && code <= 0xDBFFu) {
+                int w0, w1, w2, w3;
+
+                /* High surrogate must be followed by \uDC00..\uDFFF */
+                if (i + 10 >= sp.n) return -1;
+                if (sp.p[i + 5] != '\\' || sp.p[i + 6] != 'u') return -1;
+
+                w0 = jstok_hexval(sp.p[i + 7]);
+                w1 = jstok_hexval(sp.p[i + 8]);
+                w2 = jstok_hexval(sp.p[i + 9]);
+                w3 = jstok_hexval(sp.p[i + 10]);
+                if (w0 < 0 || w1 < 0 || w2 < 0 || w3 < 0) return -1;
+
+                low = (unsigned)((w0 << 12) | (w1 << 8) | (w2 << 4) | w3);
+                if (low < 0xDC00u || low > 0xDFFFu) return -1;
+
+                code = 0x10000u + (((code - 0xD800u) << 10) | (low - 0xDC00u));
+                i += 10;
+            } else {
+                if (code >= 0xDC00u && code <= 0xDFFFu) return -1;
+                i += 4;
+            }
 
             /* Encode as UTF-8, minimal */
             if (code <= 0x7F) {
@@ -1090,15 +1112,19 @@ JSTOK_API int jstok_unescape(const char* json, const jstoktok_t* t, char* out, s
                 if (w + 2 > out_cap) return -1;
                 out[w++] = (char)(0xC0 | ((code >> 6) & 0x1F));
                 out[w++] = (char)(0x80 | (code & 0x3F));
-            } else {
+            } else if (code <= 0xFFFF) {
                 if (w + 3 > out_cap) return -1;
                 out[w++] = (char)(0xE0 | ((code >> 12) & 0x0F));
                 out[w++] = (char)(0x80 | ((code >> 6) & 0x3F));
                 out[w++] = (char)(0x80 | (code & 0x3F));
+            } else {
+                if (code > 0x10FFFFu) return -1;
+                if (w + 4 > out_cap) return -1;
+                out[w++] = (char)(0xF0 | ((code >> 18) & 0x07));
+                out[w++] = (char)(0x80 | ((code >> 12) & 0x3F));
+                out[w++] = (char)(0x80 | ((code >> 6) & 0x3F));
+                out[w++] = (char)(0x80 | (code & 0x3F));
             }
-
-            hv = 0;
-            (void)hv;
             continue;
         }
 
