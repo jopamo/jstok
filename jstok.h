@@ -480,10 +480,17 @@ static int jstok_parse_number_span(jstok_parser* p, const char* json, int json_l
         while (i < json_len && jstok_is_digit(json[i])) i++;
     }
 
-    /* Resume safety: If we hit EOF, we don't know if the number is done. */
+    /*
+     * EOF after a number is valid only for top-level values.
+     * Inside objects/arrays, EOF means we're missing a delimiter/closer.
+     */
     if (i >= json_len) {
-        jstok_set_error(p, JSTOK_ERROR_PART, i);
-        return JSTOK_ERROR_PART;
+        if (p->depth != 0) {
+            jstok_set_error(p, JSTOK_ERROR_PART, i);
+            return JSTOK_ERROR_PART;
+        }
+        *out_end = i;
+        return 0;
     }
 
     if (i < json_len && !jstok_is_delim(json[i])) {

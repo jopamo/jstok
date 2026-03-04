@@ -99,6 +99,7 @@ int test_core_numbers(void) {
     jstok_parser p;
     jstoktok_t t[10];
     const char* json_ints = "[0, 123, -456]";
+    const char* json_root_int = "123";
 #ifndef JSTOK_NO_HELPERS
     const char* json_floats = "[0.5, 123.456, -1.2e+10]";
 #endif
@@ -115,8 +116,18 @@ int test_core_numbers(void) {
     ASSERT(n == 123);
     ASSERT(jstok_atoi64(json_ints, &t[3], &n) == 0);
     ASSERT(n == -456);
+#endif
 
-    // 1.6 Numbers (Floating Point)
+    // 1.6 Root numeric document
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, json_root_int, (int)strlen(json_root_int), t, 10) == 1);
+    ASSERT(t[0].type == JSTOK_PRIMITIVE);
+
+#ifndef JSTOK_NO_HELPERS
+    ASSERT(jstok_atoi64(json_root_int, &t[0], &n) == 0);
+    ASSERT(n == 123);
+
+    // 1.7 Numbers (Floating Point)
     // We don't have jstok_atof in standard API, but we check token boundaries
     jstok_init(&p);
     ASSERT(jstok_parse(&p, json_floats, (int)strlen(json_floats), t, 10) == 4);
@@ -373,6 +384,11 @@ int test_string_errors(void) {
 int test_number_errors(void) {
     jstok_parser p;
     jstoktok_t t[10];
+
+    // Valid root number at EOF
+    const char* ok_root = "123";
+    jstok_init(&p);
+    ASSERT(jstok_parse(&p, ok_root, (int)strlen(ok_root), t, 10) == 1);
 
     // Invalid numbers
     const char* bad_num_1 = "-";
